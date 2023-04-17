@@ -1,33 +1,41 @@
 #!/usr/bin/python
-import sys, os, argparse
+import os, argparse, re
 from Bio import Entrez, SeqIO, SeqRecord
 import pandas as pd
 
 # Variables
-SEARCHCLADE="AVES"
 LOCI="COI" # Irrelevant for now - edit in get_entrez_sequences_iterator and SeqRecords_iterator_to_TaxaRecords
+
+ALLOW_SUB_SPECIES = False
+REMOVE_IDS = False
 
 class TaxaRecord:
     def __init__(self, taxid, taxonomy):
         global FAMILIES
         self.id = taxid
-        self.taxonomy = taxonomy[12:]
-        # self.family = '_'.join(set(taxonomy).intersection(set(FAMILIES)))
-        # if not self.family:
-        if len(taxonomy)>13:
-            self.family = taxonomy[14]
-        else:
-            self.family = ""
+        self.taxonomy = taxonomy
+        self.family = "" # Not implemented
         self.seqs = []
     
     def __str__(self):
+        global REMOVE_IDS
         out = ""
-        if self.family:
-            out += f">{self.family}_{self.id}_{self.seqs[0][0]}\n{self.seqs[0][1]}"
+        # if self.family:
+        #     out += f">{self.family}_{self.id}_{self.seqs[0][0]}\n{self.seqs[0][1]}"
+        # else:
+
+        if REMOVE_IDS:
+            out += f">{self.id}\n{self.seqs[0][1]}"
+
+            for seqpair in self.seqs[1:]:
+                out += f"\n>{self.id}\n{seqpair[1]}"
         else:
             out += f">{self.id}_{self.seqs[0][0]}\n{self.seqs[0][1]}"
-        for seqpair in self.seqs[1:]:
-            out += f"\n>{self.family}_{self.id}_{seqpair[0]}\n{seqpair[1]}"
+
+            for seqpair in self.seqs[1:]:
+                out += f"\n>{self.id}_{seqpair[0]}\n{seqpair[1]}"
+
+        
         return out
 
     def add_seq(self, seq):
@@ -85,6 +93,8 @@ def get_entrez_sequences_iterator(term, retstart):
 
 # Parse SeqRecord list as custom TaxaRecord objs
 def SeqRecords_iterator_to_TaxaRecords(records, taxrecs):
+
+    global ALLOW_SUB_SPECIES
   
     counter = 0
 
@@ -124,8 +134,11 @@ def SeqRecords_iterator_to_TaxaRecords(records, taxrecs):
             continue
 
         if len(organism.split()) > 2: 
-            print("Record has unexpected name. Taking first 2 words. " + organism + " ID=" + record.id)
-            organism = organism.split()[0] + " " + organism.split()[1]
+            if ALLOW_SUB_SPECIES:
+                organism = organism.split()[0] + " " + organism.split()[1] + "_" + organism.split()[2]
+            else:
+                print("Record has unexpected name. Taking first 2 words. " + organism + " ID=" + record.id)
+                organism = organism.split()[0] + " " + organism.split()[1]
 
         taxid = organism.replace(" ", "_")
     
@@ -159,7 +172,7 @@ def collect_and_parse_records(term):
     # Collect and parse records
     while True:
         addition = 0
-        recordsIterator = get_entrez_sequences_iterator(SEARCHCLADE, retstart)
+        recordsIterator = get_entrez_sequences_iterator(term, retstart)
         taxrecs, addition = SeqRecords_iterator_to_TaxaRecords(recordsIterator, taxrecs)
         print(f"Parsed {str(addition)} records from GenBank.")
         retstart += 1
@@ -171,10 +184,12 @@ def collect_and_parse_records(term):
     return taxrecs
 
 # Create a datafield from taxa data
-def get_df_for_taxa_data(taxrecs, filepath=None):
+def get_df_for_taxa_data(taxrecs, term, filepath=None):
 
     # if not os.path.exists(filepath):
     #     return False
+
+    filepath = os.path.join(filepath, f"{term}_taxa_data.csv")
 
     d={'family' : [], 'genus' : [], 'species' : [], 'taxonomy' : [], 'ids' : []}
     
@@ -194,10 +209,9 @@ def get_df_for_taxa_data(taxrecs, filepath=None):
 
 # Write taxa to a FASTA file
 def write_taxarecs_to_fasta(taxrecs, filepath=None):
-    global SEARCHCLADE
 
     if filepath == None:
-        filepath = f"{SEARCHCLADE}.fas"
+        filepath = "out.fas"
 
     with open(filepath, 'w') as f:
         for taxid, rec in taxrecs.items():
@@ -277,15 +291,17 @@ def read_taxrecs_from_file(filepath):
     return taxrecs
 
 # Prune by largest sequence
-def prune_by_largest_coverage(taxrecs):
+def prune_by_largest_coverage(taxrecs, length):
 
     rm = []
     rmNno = 0
 
-    for taxid, rec, in taxrecs.items():
+    maxlen = length[1]
+    optlen = length[0]
 
-        #remove sequences above X and below 0.15*X
-        pruned = [seq for seq in rec.seqs if len(seq[1]) < 1300 and len(seq[1]) > 165]
+    for taxid, rec, in taxrecs.items():
+    
+        pruned = [seq for seq in rec.seqs if len(seq[1]) < maxlen and len(seq[1]) > 0.15*maxlen]
 
         if len(pruned) == 0:
             rm.append(taxid)
@@ -306,7 +322,7 @@ def prune_by_largest_coverage(taxrecs):
         closest_distance = float('inf')
         for tup in rec.seqs:
             seq_len = len(tup[1])
-            distance = abs(seq_len - 1143)
+            distance = abs(seq_len - optlen)
             if distance < closest_distance:
                 closest = tup
                 closest_distance = distance
@@ -317,8 +333,9 @@ def prune_by_largest_coverage(taxrecs):
         del taxrecs[rmkey]
 
     print("Number of removed taxa: " + str(len(rm)))
+    print("Removed Taxa: ")
     print(rm)
-    print(f"Number of removed sequences based on N = {rmNno}")
+    print(f"Number of sequences kept with missing data = {rmNno}")
 
     return taxrecs
         
@@ -326,28 +343,7 @@ def validate_email(email):
     # check if the email address is valid
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         raise argparse.ArgumentTypeError(f"{email} is not a valid email address")
-    return email
-
-# Change to your email
-Entrez.email = ""
-
-
-
-# taxrecs = collect_and_parse_records(SEARCHCLADE)
-
-# This can be done afterwards from the csv file
-# taxrecs = attempt_to_solve_families(taxrecs)
-
-# write_taxarecs_to_fasta(taxrecs)
-
-# df = get_df_for_taxa_data(taxrecs, SEARCHCLADE + "_taxa_data.csv")
-
-
-# taxrecs = read_taxrecs_from_file("aves_cytb_rms.fas")
-# taxrecs = prune_by_largest_coverage(taxrecs)
-# write_taxarecs_to_fasta(taxrecs, "aves_cytb_r_2.fas")
-
-# print(taxrecs["Amazona_albifrons"])
+    return email   
 
 # Define the argument parser
 parser = argparse.ArgumentParser(description='Process NCBI GenBank Records into custom format')
@@ -356,40 +352,74 @@ parser = argparse.ArgumentParser(description='Process NCBI GenBank Records into 
 group = parser.add_mutually_exclusive_group()
 group.add_argument('-f', '--input', dest='input_file', metavar='PATH',
                     help='Input file of taxrecords')
-group.add_argument('-df', '--Taxonomy_info_csv', dest='taxonomy_file', metavar='PATH',
+group.add_argument('-df', '--Taxonomy_info_csv', dest='taxonomy_file', metavar='PATH', nargs='?', const='.',
                     help='Produce a CSV file of taxonomic information')
-
 # Required argument
-parser.add_argument('-e', '--email', dest='email', required=True,
+parser.add_argument('-e', '--email', dest='email',
                     type=validate_email, help='Input email address')
 
 # Optional argument
 parser.add_argument('-o', '--output', dest='output_file', metavar='PATH',
                     help='Path for output file')
-parser.add_argument('-rmdup', '--remove_duplicates', dest='remove_duplicates', action='store_true',
+parser.add_argument('--allow-sub-species', dest='ALLOW_SUB_SPECIES', action='store_true',
+                    help='Allow sub-species in taxonomic records')
+parser.add_argument('--no-allow-sub-species', dest='ALLOW_SUB_SPECIES', action='store_false',
+                    help='Do not allow sub-species in taxonomic records (default)')
+parser.add_argument('--remove_ids', dest='REMOVE_IDS', action='store_true',
+                    help='Remove accession numbers from FASTA file (default)')
+parser.add_argument('--keep_ids', dest='REMOVE_IDS', action='store_false',
+                    help='Keep accession numbers in FASTA file')
+parser.add_argument('-rmdup', '--remove_duplicates', nargs='*', type=int, 
+                    metavar='Optimal_Length Max_Length', action="store",
                     help='Remove duplicate taxa records by optimal length')
-parser.set_defaults(remove_duplicates=False)
 
-# Help flag
-# parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
-#                     help='Show this help file')
 
-args = parser.parse_args()
+parser.add_argument('-s', '--search_term', dest='search_term', type=str, nargs='?',
+                    help='Clade/Group term for NCBI GenBank Search (Required if -f not used)')
+parser.set_defaults(allow_sub_species=False) 
+parser.set_defaults(allow_sub_species=False) 
+# parser.set_defaults(remove_duplicates=tuple(-1, -1)) 
+
+
+args = parser.parse_args()  
+# args.taxonomy_file = get_taxonomy_file_path(args.taxonomy_file)
+
+ALLOW_SUB_SPECIES = args.ALLOW_SUB_SPECIES
+REMOVE_IDS = args.REMOVE_IDS
 
 # Set email
 Entrez.email = args.email
 
+# Define the tax dict
 taxrecs = []
 
 # call the appropriate function based on the command line arguments
 if args.input_file:
     if os.path.exists(args.input_file):
+        print("Reading taxa records from file: " + str(args.input_file))
         taxrecs = read_taxrecs_from_file(str(args.input_file))
 else:
-    taxrecs = collect_and_parse_records(SEARCHCLADE)
+    if not args.email:
+        parser.error('Email is required to download from NCBI GenBank.')
+    if not args.search_term:
+        parser.error('Search term is required if -f is not provided.')
+    if len(str(args.search_term).split()) > 1:
+        parser.error('Please provide only one search term')
+    print("Collecting records from NCBI Genbank with search term: " + str(args.search_term))
+    taxrecs = collect_and_parse_records(args.search_term)
 
-if args.remove_duplicates:
-    taxrecs = prune_by_largest_coverage(taxrecs)
+if args.remove_duplicates is not None:
+    if len(args.remove_duplicates) not in (0, 2):
+        parser.error('Specify two numbers or none for defaults (1100, 1300)')
+    if len(args.remove_duplicates) == 0:
+        print("Removing duplicate taxa records based on length: opt=1100, max=1300")
+        taxrecs = prune_by_largest_coverage(taxrecs, [1100, 1300])
+    else:
+        print(f"Removing duplicate taxa records based on length: opt={args.remove_duplicates[0]} max={args.remove_duplicates[1]}")
+        taxrecs = prune_by_largest_coverage(taxrecs, args.remove_duplicates)
+
+
+# print(taxrecs['Accipiter_nisus'])
 
 if args.output_file:
     write_taxarecs_to_fasta(taxrecs, str(args.output_file))
@@ -397,10 +427,10 @@ else:
     if args.input_file:
         write_taxarecs_to_fasta(taxrecs, str(args.input_file) + "_o.fas")
     else:
-        write_taxarecs_to_fasta(taxrecs, f"{SEARCHCLADE}_out.fas")
+        write_taxarecs_to_fasta(taxrecs, "seqprog_out.fas")
 
 if args.taxonomy_file:
-    df = get_df_for_taxa_data(taxrecs, SEARCHCLADE + "_taxa_data.csv")
+    df = get_df_for_taxa_data(taxrecs, args.search_term, args.taxonomy_file)
 
     
 
