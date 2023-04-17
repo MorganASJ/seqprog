@@ -10,7 +10,7 @@ Reads and writes sequences in common format
 
 ## Using the program
 
->   Usage: seqprog.py [-h] [-f PATH | -df [PATH]] [-e EMAIL] [-o PATH]
+>   Usage: python3 seqprog.py [-h] [-f PATH | -df [PATH]] [-e EMAIL] [-o PATH]
                     [--allow-sub-species] [--no-allow-sub-species]
                     [--remove_ids] [--keep_ids]
                     [-rmdup [Optimal_Length Max_Length [Optimal_Length Max_Length ...]]]
