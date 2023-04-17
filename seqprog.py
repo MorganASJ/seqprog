@@ -378,11 +378,8 @@ parser.add_argument('-s', '--search_term', dest='search_term', type=str, nargs='
                     help='Clade/Group term for NCBI GenBank Search (Required if -f not used)')
 parser.set_defaults(allow_sub_species=False) 
 parser.set_defaults(allow_sub_species=False) 
-# parser.set_defaults(remove_duplicates=tuple(-1, -1)) 
-
 
 args = parser.parse_args()  
-# args.taxonomy_file = get_taxonomy_file_path(args.taxonomy_file)
 
 ALLOW_SUB_SPECIES = args.ALLOW_SUB_SPECIES
 REMOVE_IDS = args.REMOVE_IDS
@@ -417,9 +414,6 @@ if args.remove_duplicates is not None:
     else:
         print(f"Removing duplicate taxa records based on length: opt={args.remove_duplicates[0]} max={args.remove_duplicates[1]}")
         taxrecs = prune_by_largest_coverage(taxrecs, args.remove_duplicates)
-
-
-# print(taxrecs['Accipiter_nisus'])
 
 if args.output_file:
     write_taxarecs_to_fasta(taxrecs, str(args.output_file))
