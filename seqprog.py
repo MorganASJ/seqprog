@@ -350,7 +350,7 @@ Entrez.email = ""
 # print(taxrecs["Amazona_albifrons"])
 
 # Define the argument parser
-parser = argparse.ArgumentParser(description='Process NNCBI GenBank Records into custom format')
+parser = argparse.ArgumentParser(description='Process NCBI GenBank Records into custom format')
 
 # Mutually exclusive arguments
 group = parser.add_mutually_exclusive_group()
@@ -371,8 +371,8 @@ parser.add_argument('-rmdup', '--remove_duplicates', dest='remove_duplicates', a
 parser.set_defaults(remove_duplicates=False)
 
 # Help flag
-parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
-                    help='Show this help file')
+# parser.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS,
+#                     help='Show this help file')
 
 args = parser.parse_args()
 
