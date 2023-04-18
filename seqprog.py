@@ -388,7 +388,7 @@ REMOVE_IDS = args.REMOVE_IDS
 Entrez.email = args.email
 
 # Define the tax dict
-taxrecs = []
+taxrecs = {}
 
 # call the appropriate function based on the command line arguments
 if args.input_file:
