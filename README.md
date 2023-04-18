@@ -1,6 +1,6 @@
 # SEQPROG
 
-Requires Python 3.7+ with following packages:
+Requires Python 3.6+ with following packages:
 
 * Argparse
 * BioPython
