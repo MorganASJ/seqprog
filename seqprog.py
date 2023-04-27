@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import os, argparse, re
+import os, argparse, re, csv
 from Bio import Entrez, SeqIO, SeqRecord
 import pandas as pd
 
@@ -24,7 +24,7 @@ class TaxaRecord:
         #     out += f">{self.family}_{self.id}_{self.seqs[0][0]}\n{self.seqs[0][1]}"
         # else:
 
-        if REMOVE_IDS:
+        if REMOVE_IDS or self.seqs[0][1] == "N":
             out += f">{self.id}\n{self.seqs[0][1]}"
 
             for seqpair in self.seqs[1:]:
@@ -79,14 +79,14 @@ class TaxaRecord:
 def get_entrez_sequences_iterator(term, retstart):
 
     # Search for all the COI sequences in the family
-    handle = Entrez.esearch(db="nucleotide", term=f"{term}[Organism] AND CytB[Gene]", retstart=retstart*500, retmax=500)
+    handle = Entrez.esearch(db="nucleotide", term=f"{term}[Organism] AND ND2[Gene]", retstart=retstart*500, retmax=500)
 
     # Retrieve the list of matching sequence IDs
     record = Entrez.read(handle)
     id_list = record["IdList"]
 
     # Download the sequences in GB format
-    handle = Entrez.efetch(db="nucleotide", id=id_list, rettype="gb")
+    handle = Entrez.efetch(db="nucleotide", id=id_list, rettype="gb", retmode="text")
     records = SeqIO.parse(handle, "genbank")
 
     return records
@@ -106,7 +106,7 @@ def SeqRecords_iterator_to_TaxaRecords(records, taxrecs):
         for feature in record.features:
             # Find features with CDS type and COI as gene name or product
             try:
-                if feature.type == "CDS" and (feature.qualifiers["gene"][0].upper() in ["CYTB", "CYTOCHROME B"] and feature.qualifiers["product"][0].lower() in ["cytochrome b", "cytochrome-b"]):
+                if feature.type == "CDS" and (feature.qualifiers["gene"][0].upper() in ["ND2", "NADH DEHYDROGENASE SUBUNIT 2"] and feature.qualifiers["product"][0].lower() in ["nadh dehydrogenase subunit 2", "nd2"]):
 
                     # Extract the COI feature and create a new SeqRecord object
                     seq = str(feature.extract(record.seq))
@@ -207,6 +207,73 @@ def get_df_for_taxa_data(taxrecs, term, filepath=None):
     
     return df
 
+def search_tax(rank, lineage):
+    for item in lineage:
+        if item['Rank'] == rank:
+            return(item['ScientificName'])
+
+def get_df_for_taxa_data(taxrecs, term, filepath=None):
+
+    global REMOVE_IDS
+    # Create filepath if none exists
+    if not filepath:
+        filepath = os.path.join(filepath, f"{term}_taxa_data.csv")
+
+    filename = ('out.csv')
+    header = ("Tip", "Genus", "Tribe", "Subfamily", "Family", "Superfamily", "Order", "Infraclass", "Class")
+    with open(filename, "w", newline="") as f:
+
+        writer = csv.writer(f)
+        writer.writerow(header)
+
+        genera = {}
+        # For each taxon collect information
+        for taxid, rec in taxrecs.items():
+            
+            scientific_name = taxid.split('_')
+            taxinfo = None
+
+            if scientific_name[0] not in genera:
+                handle = Entrez.esearch(db="Taxonomy", term=scientific_name[0])
+                ident = Entrez.read(handle, validate=True)
+                if len(ident['IdList']) > 1:
+                    print(f"More than one taxa id returned for {taxid}, searching with species name but check in final CSV.")
+                    handle = Entrez.esearch(db="Taxonomy", term=taxid.replace('_', ' '))
+                    ident = Entrez.read(handle, validate=True)
+                handle = Entrez.efetch(db="taxonomy", id=ident['IdList'][0], retmode="xml")
+                record = Entrez.read(handle)
+                if len(ident['IdList']) > 1:
+                    print(f"More than one taxa lineage returned for {taxid}, please fix and then try again.")
+                    continue
+                taxonomy = record[0]['LineageEx']
+                Phylum = search_tax('phylum', taxonomy)
+                if not Phylum: Phylum = "NA"
+                Infraclass = search_tax('infraclass', taxonomy)
+                if not Infraclass: Infraclass = "NA"
+                Class = search_tax('class', taxonomy)
+                if not Class: Class = "NA"
+                Order = search_tax('order', taxonomy)
+                if not Order: Order = "NA"
+                Superfamily = search_tax('superfamily', taxonomy)
+                if not Superfamily: Superfamily = "NA"
+                Family = search_tax('family', taxonomy)
+                if not Family: Family = "NA"
+                Subfamily = search_tax('subfamily', taxonomy)
+                if not Subfamily: Subfamily = "NA"
+                Tribe = search_tax('tribe', taxonomy)
+                if not Tribe: Tribe = "NA"
+                info_to_keep = [scientific_name[0], Tribe, Subfamily, Family, Superfamily, Order, Infraclass, Class]
+                genera[scientific_name[0]] = info_to_keep
+                taxinfo = info_to_keep
+                # print(taxinfo)
+            else:
+                taxinfo = genera[scientific_name[0]]
+
+            writer.writerow([taxid] + taxinfo)            
+
+    return True
+
+
 # Write taxa to a FASTA file
 def write_taxarecs_to_fasta(taxrecs, filepath=None):
 
@@ -249,6 +316,7 @@ def read_taxrecs_from_file(filepath):
 
                 #If new header add last entry to list
                 if currentTaxID:
+                    
                     counter += 1  
                     if currentTaxID in taxrecs:
                         taxrecs[currentTaxID].add_seq((currentSeqID, currentSeq))
@@ -264,12 +332,14 @@ def read_taxrecs_from_file(filepath):
                 fields = header.split("_")
                 
                 #Collect details
-                if len(fields) == 4:
-                    currentTaxID = fields[1] + '_' + fields[2]
-                    currentSeqID = fields[3]
+                if len(fields) == 3:
+                    currentTaxID = fields[0] + '_' + fields[1]
+                    currentSeqID = fields[2]
                     # print(currentTaxID + " " + str(counter))
+                elif len(fields) == 2:
+                    currentTaxID = fields[0] + '_' + fields[1]
+                    currentSeqID = "N"
                 else:
-                    #skip this taxa
                     currentTaxID=""
 
             else:
@@ -287,6 +357,8 @@ def read_taxrecs_from_file(filepath):
                 taxrecs[currentTaxID].add_seq((currentSeqID, currentSeq))
 
     print(f"Successfully parsed {str(counter)} records from {filepath}.")
+
+    # print(taxrecs)
 
     return taxrecs
 
@@ -329,8 +401,8 @@ def prune_by_largest_coverage(taxrecs, length):
 
         rec.seqs = [closest]
 
-    for rmkey in rm:
-        del taxrecs[rmkey]
+    # for rmkey in rm:
+    #     del taxrecs[rmkey]
 
     print("Number of removed taxa: " + str(len(rm)))
     print("Removed Taxa: ")
@@ -349,10 +421,10 @@ def validate_email(email):
 parser = argparse.ArgumentParser(description='Process NCBI GenBank Records into custom format')
 
 # Mutually exclusive arguments
-group = parser.add_mutually_exclusive_group()
-group.add_argument('-f', '--input', dest='input_file', metavar='PATH',
+# group = parser.add_mutually_exclusive_group()
+parser.add_argument('-f', '--input', dest='input_file', metavar='PATH',
                     help='Input file of taxrecords')
-group.add_argument('-df', '--Taxonomy_info_csv', dest='taxonomy_file', metavar='PATH', nargs='?', const='.',
+parser.add_argument('-df', '--Taxonomy_info_csv', dest='taxonomy_file', metavar='PATH', nargs='?', const='.',
                     help='Produce a CSV file of taxonomic information')
 # Required argument
 parser.add_argument('-e', '--email', dest='email',
@@ -394,7 +466,7 @@ taxrecs = {}
 if args.input_file:
     if os.path.exists(args.input_file):
         print("Reading taxa records from file: " + str(args.input_file))
-        taxrecs = read_taxrecs_from_file(str(args.input_file))
+        taxrecs = read_taxrecs_from_file(args.input_file)
 else:
     if not args.email:
         parser.error('Email is required to download from NCBI GenBank.')
