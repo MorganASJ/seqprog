@@ -219,14 +219,16 @@ def get_df_for_taxa_data(taxrecs, term, filepath=None):
     if not filepath:
         filepath = os.path.join(filepath, f"{term}_taxa_data.csv")
 
-    filename = ('out.csv')
+    failed = []
+    filepath = ('out.csv')
     header = ("Tip", "Genus", "Tribe", "Subfamily", "Family", "Superfamily", "Order", "Infraclass", "Class")
-    with open(filename, "w", newline="") as f:
+    with open(filepath, "w", newline="") as f:
 
         writer = csv.writer(f)
         writer.writerow(header)
 
         genera = {}
+
         # For each taxon collect information
         for taxid, rec in taxrecs.items():
             
@@ -234,43 +236,65 @@ def get_df_for_taxa_data(taxrecs, term, filepath=None):
             taxinfo = None
 
             if scientific_name[0] not in genera:
-                handle = Entrez.esearch(db="Taxonomy", term=scientific_name[0])
-                ident = Entrez.read(handle, validate=True)
-                if len(ident['IdList']) > 1:
-                    print(f"More than one taxa id returned for {taxid}, searching with species name but check in final CSV.")
-                    handle = Entrez.esearch(db="Taxonomy", term=taxid.replace('_', ' '))
-                    ident = Entrez.read(handle, validate=True)
-                handle = Entrez.efetch(db="taxonomy", id=ident['IdList'][0], retmode="xml")
-                record = Entrez.read(handle)
-                if len(ident['IdList']) > 1:
-                    print(f"More than one taxa lineage returned for {taxid}, please fix and then try again.")
-                    continue
-                taxonomy = record[0]['LineageEx']
-                Phylum = search_tax('phylum', taxonomy)
-                if not Phylum: Phylum = "NA"
-                Infraclass = search_tax('infraclass', taxonomy)
-                if not Infraclass: Infraclass = "NA"
-                Class = search_tax('class', taxonomy)
-                if not Class: Class = "NA"
-                Order = search_tax('order', taxonomy)
-                if not Order: Order = "NA"
-                Superfamily = search_tax('superfamily', taxonomy)
-                if not Superfamily: Superfamily = "NA"
-                Family = search_tax('family', taxonomy)
-                if not Family: Family = "NA"
-                Subfamily = search_tax('subfamily', taxonomy)
-                if not Subfamily: Subfamily = "NA"
-                Tribe = search_tax('tribe', taxonomy)
-                if not Tribe: Tribe = "NA"
-                info_to_keep = [scientific_name[0], Tribe, Subfamily, Family, Superfamily, Order, Infraclass, Class]
-                genera[scientific_name[0]] = info_to_keep
-                taxinfo = info_to_keep
-                # print(taxinfo)
+                done = False
+                attempts = 0
+                while not done and attempts <= 10:
+                    try:
+                        handle = Entrez.esearch(db="Taxonomy", term=scientific_name[0])
+                        ident = Entrez.read(handle, validate=True)
+                        if len(ident['IdList']) > 1:
+                            # print(f"More than one taxa id returned for {taxid}, searching with species name but check in final CSV.")
+                            handle = Entrez.esearch(db="Taxonomy", term=taxid.replace('_', ' '))
+                            ident = Entrez.read(handle, validate=True)
+                            if len(ident['IdList']) > 1:
+                                print("More than one id returned after species specified")
+                                raise Exception("More than one id returned")
+                        handle = Entrez.efetch(db="taxonomy", id=ident['IdList'][0], retmode="xml")
+                        record = Entrez.read(handle)
+                        if len(ident['IdList']) > 1:
+                            print(f"More than one taxa lineage returned for {taxid}, please fix and then try again.")
+                            raise Exception("More than one lineage returned")
+                        done = True
+                    except:
+                        attempts +=1
+
+                if attempts >= 10 or not done:
+                    print(f"Failed to retrieve data for {taxid}.")
+                    failed.append(taxid)
+                    taxinfo = [scientific_name[0], "ERROR", "ERROR", "ERROR", "ERROR", "ERROR", "ERROR", "ERROR"]
+                else:
+                    taxonomy = record[0]['LineageEx']
+                    Phylum = search_tax('phylum', taxonomy)
+                    if not Phylum: Phylum = "NA"
+                    Infraclass = search_tax('infraclass', taxonomy)
+                    if not Infraclass: Infraclass = "NA"
+                    Class = search_tax('class', taxonomy)
+                    if not Class: Class = "NA"
+                    Order = search_tax('order', taxonomy)
+                    if not Order: Order = "NA"
+                    Superfamily = search_tax('superfamily', taxonomy)
+                    if not Superfamily: Superfamily = "NA"
+                    Family = search_tax('family', taxonomy)
+                    if not Family: Family = "NA"
+                    Subfamily = search_tax('subfamily', taxonomy)
+                    if not Subfamily: Subfamily = "NA"
+                    Tribe = search_tax('tribe', taxonomy)
+                    if not Tribe: Tribe = "NA"
+                    info_to_keep = [scientific_name[0], Tribe, Subfamily, Family, Superfamily, Order, Infraclass, Class]
+                    genera[scientific_name[0]] = info_to_keep
+                    taxinfo = info_to_keep
+                    # print(taxinfo)
             else:
                 taxinfo = genera[scientific_name[0]]
 
             writer.writerow([taxid] + taxinfo)            
 
+
+    if failed:
+        print("Information couldn't be gathered for the following taxa:")
+        for taxid in failed:
+            print(taxid)
+    
     return True
 
 
@@ -410,7 +434,20 @@ def prune_by_largest_coverage(taxrecs, length):
     print(f"Number of sequences kept with missing data = {rmNno}")
 
     return taxrecs
-        
+
+def custom_script():
+
+    taxa = []
+
+    with open('out.csv', 'r') as csvfile:
+        csvreader = csv.reader(csvfile)
+        header = next(csvreader) # Skip the header row
+        for row in csvreader:
+            taxa.append(row[0])
+
+    return taxa
+
+
 def validate_email(email):
     # check if the email address is valid
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
@@ -477,6 +514,8 @@ else:
     print("Collecting records from NCBI Genbank with search term: " + str(args.search_term))
     taxrecs = collect_and_parse_records(args.search_term)
 
+taxrecs = dict(sorted(taxrecs.items(), key=lambda item: item[0]))
+
 if args.remove_duplicates is not None:
     if len(args.remove_duplicates) not in (0, 2):
         parser.error('Specify two numbers or none for defaults (1100, 1300)')
@@ -499,6 +538,12 @@ if args.taxonomy_file:
     df = get_df_for_taxa_data(taxrecs, args.search_term, args.taxonomy_file)
 
     
+taxals = custom_script()
+
+difference = [taxrec for taxrec in taxrecs.keys() if taxrec not in taxals]
+
+print(difference)
+
 
 
     
