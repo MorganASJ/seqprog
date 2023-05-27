@@ -79,7 +79,7 @@ class TaxaRecord:
 def get_entrez_sequences_iterator(term, retstart):
 
     # Search for all the COI sequences in the family
-    handle = Entrez.esearch(db="nucleotide", term=f"{term}[Organism] AND ND2[Gene]", retstart=retstart*500, retmax=500)
+    handle = Entrez.esearch(db="nucleotide", term=f"{term}[Organism] AND (COI[Gene] OR CO1[Gene] OR COX1[Gene] OR COXI[Gene]) NOT environmental[Title]", retstart=retstart*500, retmax=500)
 
     # Retrieve the list of matching sequence IDs
     record = Entrez.read(handle)
@@ -106,14 +106,13 @@ def SeqRecords_iterator_to_TaxaRecords(records, taxrecs):
         for feature in record.features:
             # Find features with CDS type and COI as gene name or product
             try:
-                if feature.type == "CDS" and (feature.qualifiers["gene"][0].upper() in ["ND2", "NADH DEHYDROGENASE SUBUNIT 2"] and feature.qualifiers["product"][0].lower() in ["nadh dehydrogenase subunit 2", "nd2"]):
+                if feature.type == "CDS" and (feature.qualifiers["gene"][0].upper() in ["COI", "CO1", "COX1", "COXI"] and feature.qualifiers["product"][0].lower() in ["cytochrome oxidase subunit 1", "cytochrome c oxidase subunit i", "cytochrome oxidase subunit i", "cytochrome c oxidase subunit 1", "cytochrome oxidase, subunit 1", "cytochrome oxidase, subunit i"]):
 
                     # Extract the COI feature and create a new SeqRecord object
                     seq = str(feature.extract(record.seq))
 
                     if len(seq) < 20:
-                        seq = None
-                        
+                        seq = None    
 
                     break
 
@@ -141,23 +140,25 @@ def SeqRecords_iterator_to_TaxaRecords(records, taxrecs):
                 organism = organism.split()[0] + " " + organism.split()[1]
 
         taxid = organism.replace(" ", "_")
+
+        recid = record.id.replace("_", "-")
     
         # print(f"{taxid} : {record.id}")
 
         if taxid in taxrecs:
-            taxrecs[taxid].add_seq((record.id, seq))
+            taxrecs[taxid].add_seq((recid, seq))
             counter += 1
         else:
             # Parse taxonomic information
             try:
                 taxonomy = record.annotations['taxonomy']
                 taxrecs[taxid] = TaxaRecord(taxid, taxonomy)
-                taxrecs[taxid].add_seq((record.id, seq))
+                taxrecs[taxid].add_seq((recid, seq))
                 counter += 1
             except:
-                print("Record does not show taxonomic source. ID=" + record.id)
+                print("Record does not show taxonomic source. ID=" + recid)
                 taxrecs[taxid] = TaxaRecord(taxid, ["None"])
-                taxrecs[taxid].add_seq((record.id, seq))
+                taxrecs[taxid].add_seq((recid, seq))
                 counter += 1
         if counter % 500 == 0:
             print(counter)
@@ -184,50 +185,55 @@ def collect_and_parse_records(term):
     return taxrecs
 
 # Create a datafield from taxa data
-def get_df_for_taxa_data(taxrecs, term, filepath=None):
-
-    # if not os.path.exists(filepath):
-    #     return False
-
-    filepath = os.path.join(filepath, f"{term}_taxa_data.csv")
-
-    d={'family' : [], 'genus' : [], 'species' : [], 'taxonomy' : [], 'ids' : []}
-    
-    for taxid, rec in taxrecs.items():
-        d['family'].append(rec.family)
-        d['genus'].append(rec.get_genus())
-        d['species'].append(rec.get_species())
-        d['taxonomy'].append(rec.get_taxonomy_str())
-        d['ids'].append(rec.get_seq_ids_str())
-
-    df = pd.DataFrame(data=d)
-
-    if filepath:
-        df.to_csv(filepath)
-    
-    return df
-
 def search_tax(rank, lineage):
     for item in lineage:
         if item['Rank'] == rank:
             return(item['ScientificName'])
+
+def get_preexisting_df(filepath):
+
+    print("Attempting to fill database from previous taxonomy files...")
+    for path in filepath:
+        if not os.path.exists(path):
+            print(f"Failed to access {path}. Clean run will be made.")
+            return {}
+    
+    genera = {}
+    with open(filepath[0], 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            genus = row['Genus']
+            if genus not in genera:
+                # print(genus)
+                genera[genus] = [row[key] for key in reader.fieldnames[1:]]
+    with open(filepath[1], 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            genus = row['Genus']
+            if genus not in genera:
+                # print(genus)
+                genera[genus] = [row[key] for key in reader.fieldnames[1:]]
+    # print(genera.keys())
+    # print(len(genera.keys()))
+    return genera
 
 def get_df_for_taxa_data(taxrecs, term, filepath=None):
 
     global REMOVE_IDS
     # Create filepath if none exists
     if not filepath:
+        print(f"No file path provided writing to {term}_taxa_data.csv")
         filepath = os.path.join(filepath, f"{term}_taxa_data.csv")
 
     failed = []
-    filepath = ('out.csv')
+    # filepath = ("out.csv")
     header = ("Tip", "Genus", "Tribe", "Subfamily", "Family", "Superfamily", "Order", "Infraclass", "Class")
+    genera = get_preexisting_df(['cytb.csv', 'coi_boot.csv'])
+    print(f"Writing taxonomy information to {filepath}...")
     with open(filepath, "w", newline="") as f:
-
-        writer = csv.writer(f)
+        writer = csv.writer(f, delimiter="\t")
         writer.writerow(header)
-
-        genera = {}
+        count = 0
 
         # For each taxon collect information
         for taxid, rec in taxrecs.items():
@@ -236,8 +242,11 @@ def get_df_for_taxa_data(taxrecs, term, filepath=None):
             taxinfo = None
 
             if scientific_name[0] not in genera:
+                if count % 20 == 0:
+                    print(f"Made {count} accesses to NCBI Taxonomy...")
                 done = False
                 attempts = 0
+                count += 1
                 while not done and attempts <= 10:
                     try:
                         handle = Entrez.esearch(db="Taxonomy", term=scientific_name[0])
@@ -287,7 +296,9 @@ def get_df_for_taxa_data(taxrecs, term, filepath=None):
             else:
                 taxinfo = genera[scientific_name[0]]
 
-            writer.writerow([taxid] + taxinfo)            
+            writer.writerow([taxid] + taxinfo)    
+
+    print("Made " + str(count) + " access to NCBI Taxonomy")        
 
 
     if failed:
@@ -401,14 +412,12 @@ def prune_by_largest_coverage(taxrecs, length):
 
         if len(pruned) == 0:
             rm.append(taxid)
-            # del taxrecs[taxid]
             continue
 
         remN = [seq for seq in pruned if not any(letter in seq[1] for letter in ["N", "X"])]
 
         if len(remN) == 0:
-            print("No choice but to use seq with missing data")
-            print(pruned)
+            print(f"{taxid} : No choice but to use seq with missing data")
             rmNno += 1
         else:
             pruned = remN
@@ -425,8 +434,8 @@ def prune_by_largest_coverage(taxrecs, length):
 
         rec.seqs = [closest]
 
-    # for rmkey in rm:
-    #     del taxrecs[rmkey]
+    for rmkey in rm:
+        del taxrecs[rmkey]
 
     print("Number of removed taxa: " + str(len(rm)))
     print("Removed Taxa: ")
@@ -529,20 +538,12 @@ if args.remove_duplicates is not None:
 if args.output_file:
     write_taxarecs_to_fasta(taxrecs, str(args.output_file))
 else:
-    if args.input_file:
-        write_taxarecs_to_fasta(taxrecs, str(args.input_file) + "_o.fas")
-    else:
-        write_taxarecs_to_fasta(taxrecs, "seqprog_out.fas")
+    if args.remove_duplicates:
+        write_taxarecs_to_fasta(taxrecs, str(args.input_file) + "_r.fas")
 
 if args.taxonomy_file:
+    print("Accessing NCBI Taxonomy to resolve lineage information for taxa in input file.")
     df = get_df_for_taxa_data(taxrecs, args.search_term, args.taxonomy_file)
-
-    
-taxals = custom_script()
-
-difference = [taxrec for taxrec in taxrecs.keys() if taxrec not in taxals]
-
-print(difference)
 
 
 
