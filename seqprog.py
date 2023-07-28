@@ -444,6 +444,36 @@ def prune_by_largest_coverage(taxrecs, length):
 
     return taxrecs
 
+def prune_taxa_set(taxrecs, path):
+    
+    if not os.path.exists(path):
+        print(f"Failed to access {path}. No changes to files will be made.")
+        return taxrecs
+
+    count = 0
+    lines = 0
+    taxrecs_prime = {}
+    print("Reading file...")
+    with open(path, "r") as f:
+
+        for line in f:
+            lines += 1
+            taxid = line.rstrip("\n")
+
+            # print(taxid)
+            if len(taxid.split("_")) != 2:
+                print("Could not understand taxon name: " + taxid)
+            elif taxid not in taxrecs.keys():
+                print(taxid + " not in current stored records.")
+            else:
+                taxrecs_prime[taxid] = taxrecs[taxid]
+                count += 1
+    
+    print("Pruned taxa records to those specified in file. [" + str(count) + "/" + str(lines) + "]" )
+
+    return taxrecs_prime
+        
+
 def custom_script():
 
     taxa = []
@@ -478,6 +508,8 @@ parser.add_argument('-e', '--email', dest='email',
 
 # Optional argument
 parser.add_argument('-o', '--output', dest='output_file', metavar='PATH',
+                    help='Path for output file')
+parser.add_argument('-t', '--taxon_prune_list', dest='required_taxa', metavar='PATH',
                     help='Path for output file')
 parser.add_argument('--allow-sub-species', dest='ALLOW_SUB_SPECIES', action='store_true',
                     help='Allow sub-species in taxonomic records')
@@ -534,6 +566,10 @@ if args.remove_duplicates is not None:
     else:
         print(f"Removing duplicate taxa records based on length: opt={args.remove_duplicates[0]} max={args.remove_duplicates[1]}")
         taxrecs = prune_by_largest_coverage(taxrecs, args.remove_duplicates)
+
+if args.required_taxa:
+    print("Pruning output taxa records to those specified in file...")
+    taxrecs = prune_taxa_set(taxrecs, args.required_taxa)
 
 if args.output_file:
     write_taxarecs_to_fasta(taxrecs, str(args.output_file))
